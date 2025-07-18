@@ -6,6 +6,8 @@ import "core:math/linalg"
 import "core:math/rand"
 import rl "vendor:raylib"
 
+WINDOW_HEIGHT :: 960
+WINDOW_WIDTH :: 960
 SCREEN_SIZE :: 320
 PADDLE_WIDTH :: 50
 PADDLE_HEIGHT :: 6
@@ -20,6 +22,8 @@ NUM_BLOCKS_Y :: 8
 BLOCK_WIDTH :: 28
 BLOCK_HEIGHT :: 10
 BLOCK_MAX_STATES :: 7
+
+ASSET_FOLDER_PATH :: "assets/"
 
 Block_Color :: enum {
 	Yellow,
@@ -91,6 +95,7 @@ score: int
 accumulated_time: f32
 previous_ball_pos: rl.Vector2
 previous_paddle_pos_x: f32
+special_blocks: [dynamic]rl.Rectangle
 
 restart :: proc() {
 	paddle_pos_x = SCREEN_SIZE / 2 - PADDLE_WIDTH / 2
@@ -98,8 +103,12 @@ restart :: proc() {
 	ball_pos = {SCREEN_SIZE / 2, BALL_START_Y}
 	previous_ball_pos = ball_pos
 	started = false
+	paused = false
 	game_over = false
 	score = 0
+
+	clear(&special_blocks)
+	delete(special_blocks)
 
 	for x in 0 ..< NUM_BLOCKS_X {
 		for y in 0 ..< NUM_BLOCKS_Y {
@@ -109,7 +118,6 @@ restart :: proc() {
 }
 
 // TODO
-// use this to set all the blocks to a random value between 1-5, maybe even some 0s??
 generate_blocks_randomly :: proc() -> int {
 	return rand.int_max(BLOCK_MAX_STATES)
 }
@@ -133,36 +141,47 @@ block_exists :: proc(x, y: int) -> bool {
 }
 
 main :: proc() {
+	// region ----------------------------------------------------------------------------------
+	// Initialization
 	// set VSYNC on
 	rl.SetConfigFlags({.VSYNC_HINT})
 	// init window
-	rl.InitWindow(960, 960, "Breakout!")
+	rl.InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Breakout!")
 	// init sound device
 	rl.InitAudioDevice()
 	// set upper framerate limit
 	rl.SetTargetFPS(400)
 
 	// load textures
-	background_texture := rl.LoadTexture("background.png")
-	ball_texture := rl.LoadTexture("ball.png")
-	paddle_texture := rl.LoadTexture("paddle.png")
+	background_texture := rl.LoadTexture(ASSET_FOLDER_PATH + "background.png")
+	ball_texture := rl.LoadTexture(ASSET_FOLDER_PATH + "ball.png")
+	paddle_texture := rl.LoadTexture(ASSET_FOLDER_PATH + "paddle.png")
 
 	// load audios
-	hit_block_sound := rl.LoadSound("hit_block.wav")
-	hit_paddle_sound := rl.LoadSound("hit_paddle.wav")
-	game_over_sound := rl.LoadSound("game_over.wav")
+	hit_block_sound := rl.LoadSound(ASSET_FOLDER_PATH + "hit_block.wav")
+	hit_paddle_sound := rl.LoadSound(ASSET_FOLDER_PATH + "hit_paddle.wav")
+	game_over_sound := rl.LoadSound(ASSET_FOLDER_PATH + "game_over.wav")
 
 	// load fonts
 	// game_font := rl.LoadFontEx("cascadiacode.ttf", 32, nil, 1024)
 
+	// set the inital game state
 	restart()
 
-	// main game loop
+	// region ------------------------------------------------------------------------------
+	// Game loop
+	// ----------------------------------------------------------------------------------
 	for !rl.WindowShouldClose() {
-		// dt: f32
+		// region ------------------------------------------------------------------------------
+		// Update 
 		DT :: 1.0 / 60.0 // 16 ms, 0.016 s
 
 		if !started {
+
+			if rl.IsKeyPressed(.R) {
+				restart()
+			}
+
 			ball_pos = {
 				SCREEN_SIZE / 2 + f32(math.cos(rl.GetTime()) * SCREEN_SIZE / 2.5),
 				BALL_START_Y,
@@ -176,15 +195,22 @@ main :: proc() {
 				ball_dir = linalg.normalize0(ball_to_paddle)
 				started = true
 			}
+
 		} else if game_over {
 			if rl.IsKeyPressed(.SPACE) {
 				restart()
 			}
 		} else if paused {
 			accumulated_time = 0
+
 			if rl.IsKeyPressed(.P) {
 				paused = false
 			}
+
+			if rl.IsKeyPressed(.R) {
+				restart()
+			}
+
 		} else {
 			if rl.IsKeyPressed(.R) {restart()}
 
@@ -236,6 +262,16 @@ main :: proc() {
 			paddle_pos_x = clamp(paddle_pos_x, 0, SCREEN_SIZE - PADDLE_WIDTH)
 
 			paddle_rect := rl.Rectangle{paddle_pos_x, PADDLE_POS_Y, PADDLE_WIDTH, PADDLE_HEIGHT}
+
+
+			for &v, i in special_blocks {
+				v.y += 30 * DT
+
+				if !game_over && v.y > SCREEN_SIZE {
+					fmt.println("I FELL OUT*******")
+					ordered_remove(&special_blocks, i)
+				}
+			}
 
 			// Check for collision between the ball and the paddle
 			if rl.CheckCollisionCircleRec(ball_pos, BALL_RADIUS, paddle_rect) {
@@ -290,6 +326,12 @@ main :: proc() {
 							ball_dir = reflect(ball_dir, collision_normal)
 						}
 
+						if blocks[x][y] == 5 {
+							fmt.println("SPECIAL BLOCK HIT!")
+							append(&special_blocks, calc_block_rect(x, y))
+							fmt.println(special_blocks)
+						}
+
 						blocks[x][y] -= 1
 						row_color := row_colors[y]
 						score += block_color_score[row_color]
@@ -307,6 +349,9 @@ main :: proc() {
 		ball_render_pos := math.lerp(previous_ball_pos, ball_pos, blend)
 		paddle_render_pos_x := math.lerp(previous_paddle_pos_x, paddle_pos_x, blend)
 
+
+		// region ------------------------------------------------------------------------------
+		// Draw
 		rl.BeginDrawing()
 		// rl.ClearBackground({150, 190, 220, 255})
 		rl.ClearBackground({0, 0, 0, 255})
@@ -325,10 +370,9 @@ main :: proc() {
 		// rl.DrawCircleV(ball_pos, BALL_RADIUS, {200, 90, 20, 255})
 		rl.DrawTextureV(ball_texture, ball_render_pos - {BALL_RADIUS, BALL_RADIUS}, rl.WHITE)
 
+
 		for x in 0 ..< NUM_BLOCKS_X {
 			for y in 0 ..< NUM_BLOCKS_Y {
-				// if blocks[x][y] == false {
-				// if block value == 0 then don't redraw it
 				if blocks[x][y] == 0 {
 					continue
 				}
@@ -351,11 +395,20 @@ main :: proc() {
 					block_rect,
 					block_color_values[block_value_colors[blocks[x][y]]],
 				)
-				rl.DrawLineEx(top_left, top_right, 1, {255, 255, 150, 100})
-				rl.DrawLineEx(top_left, bottom_left, 1, {255, 255, 150, 100})
-				rl.DrawLineEx(top_right, bottom_right, 1, {0, 0, 50, 100})
-				rl.DrawLineEx(bottom_left, bottom_right, 1, {0, 0, 50, 100})
+				rl.DrawLineEx(top_left, top_right, 1, {0, 0, 0, 255})
+				rl.DrawLineEx(top_left, bottom_left, 1, {0, 0, 0, 255})
+				rl.DrawLineEx(top_right, bottom_right, 1, {0, 0, 0, 255})
+				rl.DrawLineEx(bottom_left, bottom_right, 1, {0, 0, 0, 255})
+
+				// if blocks[x][y] == 5 {
+				// 	rl.DrawRectangleRec(calc_block_rect(x, y), rl.BEIGE)
+				// }
 			}
+		}
+
+		for v, i in special_blocks {
+			// fmt.println("DRAW THE BLOCK")
+			rl.DrawRectangleRec(v, rl.BEIGE)
 		}
 
 		if show_fps {
@@ -409,6 +462,11 @@ main :: proc() {
 
 		free_all(context.temp_allocator)
 	}
+
+	// region ----------------------------------------------------------------------------------
+	// De-Initialization
+
+	delete(special_blocks)
 
 	// rl.UnloadFont(game_font)
 	rl.CloseAudioDevice()

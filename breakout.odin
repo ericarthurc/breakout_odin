@@ -21,7 +21,8 @@ NUM_BLOCKS_X :: 10
 NUM_BLOCKS_Y :: 8
 BLOCK_WIDTH :: 28
 BLOCK_HEIGHT :: 10
-BLOCK_MAX_STATES :: 7
+BLOCK_MAX_STATES :: 6
+POWERUP_FALL_SPEED :: 100
 
 ASSET_FOLDER_PATH :: "assets/"
 
@@ -35,29 +36,7 @@ Block_Color :: enum {
 	None,
 }
 
-// TODO
-// probably don't need
-// will base the color off the int value not the row
-row_colors := [NUM_BLOCKS_Y]Block_Color {
-	.Red,
-	.Orange,
-	.Yellow,
-	.Green,
-	.Blue,
-	.Purple,
-	.Purple,
-	.Purple,
-}
-
-block_value_colors := [BLOCK_MAX_STATES]Block_Color {
-	.None,
-	.Purple,
-	.Blue,
-	.Green,
-	.Yellow,
-	.Orange,
-	.Red,
-}
+block_value_colors := [BLOCK_MAX_STATES]Block_Color{.None, .Blue, .Green, .Yellow, .Orange, .Red}
 
 block_color_values := [Block_Color]rl.Color {
 	.Yellow = {248, 255, 2, 255},
@@ -82,9 +61,15 @@ block_color_score := [Block_Color]int {
 	.None   = 0,
 }
 
+Block_State :: struct {
+	value:         int,
+	is_special:    bool,
+	special_count: int,
+}
+
 show_fps: bool
 // blocks: [NUM_BLOCKS_X][NUM_BLOCKS_Y]bool
-blocks: [NUM_BLOCKS_X][NUM_BLOCKS_Y]int
+blocks: [NUM_BLOCKS_X][NUM_BLOCKS_Y]Block_State
 paddle_pos_x: f32
 ball_pos: rl.Vector2
 ball_dir: rl.Vector2
@@ -108,18 +93,32 @@ restart :: proc() {
 	score = 0
 
 	clear(&special_blocks)
-	delete(special_blocks)
 
 	for x in 0 ..< NUM_BLOCKS_X {
 		for y in 0 ..< NUM_BLOCKS_Y {
-			blocks[x][y] = math.max(1, generate_blocks_randomly())
+			blocks[x][y] = generate_blocks_randomly()
 		}
 	}
 }
 
 // TODO
-generate_blocks_randomly :: proc() -> int {
-	return rand.int_max(BLOCK_MAX_STATES)
+generate_blocks_randomly :: proc() -> Block_State {
+
+	block_value_temp := math.max(1, rand.int_max(BLOCK_MAX_STATES))
+
+	is_special_temp := false
+	special_count_temp := 0
+	if rand.int_max(100) >= 99 {
+		is_special_temp = true
+		special_count_temp = rand.int_max(block_value_temp) + 1
+	}
+
+	return {
+		value = block_value_temp,
+		is_special = is_special_temp,
+		special_count = special_count_temp,
+	}
+
 }
 
 reflect :: proc(dir, normal: rl.Vector2) -> rl.Vector2 {
@@ -136,13 +135,12 @@ block_exists :: proc(x, y: int) -> bool {
 		return false
 	}
 
-	// return blocks[x][y]
-	return blocks[x][y] != 0
+	return blocks[x][y].value != 0
 }
 
 main :: proc() {
-	// region ----------------------------------------------------------------------------------
 	// Initialization
+	// ----------------------------------------------------------------------------------
 	// set VSYNC on
 	rl.SetConfigFlags({.VSYNC_HINT})
 	// init window
@@ -168,12 +166,11 @@ main :: proc() {
 	// set the inital game state
 	restart()
 
-	// region ------------------------------------------------------------------------------
 	// Game loop
 	// ----------------------------------------------------------------------------------
 	for !rl.WindowShouldClose() {
-		// region ------------------------------------------------------------------------------
 		// Update 
+		// ------------------------------------------------------------------------------
 		DT :: 1.0 / 60.0 // 16 ms, 0.016 s
 
 		if !started {
@@ -264,16 +261,23 @@ main :: proc() {
 			paddle_rect := rl.Rectangle{paddle_pos_x, PADDLE_POS_Y, PADDLE_WIDTH, PADDLE_HEIGHT}
 
 
+			// check for special blocks and start moving them downward
 			for &v, i in special_blocks {
-				v.y += 30 * DT
+				if rl.CheckCollisionRecs(v, paddle_rect) {
+					fmt.println("POWER UP HIT PADDLE")
+					special_blocks[i] = pop(&special_blocks)
+					break
+				}
+
+
+				v.y += POWERUP_FALL_SPEED * DT
 
 				if !game_over && v.y > SCREEN_SIZE {
-					fmt.println("I FELL OUT*******")
-					ordered_remove(&special_blocks, i)
+					special_blocks[i] = pop(&special_blocks)
 				}
 			}
 
-			// Check for collision between the ball and the paddle
+			// check for collision between the ball and the paddle
 			if rl.CheckCollisionCircleRec(ball_pos, BALL_RADIUS, paddle_rect) {
 				if previous_ball_pos.y > 0 {
 					offset := ball_pos.x - (paddle_rect.x + paddle_rect.width / 2)
@@ -287,9 +291,10 @@ main :: proc() {
 				}
 			}
 
+			// check for collision with the ball and blocks
 			block_x_loop: for x in 0 ..< NUM_BLOCKS_X {
 				for y in 0 ..< NUM_BLOCKS_Y {
-					if blocks[x][y] == 0 {
+					if blocks[x][y].value == 0 {
 						continue
 					}
 
@@ -326,14 +331,12 @@ main :: proc() {
 							ball_dir = reflect(ball_dir, collision_normal)
 						}
 
-						if blocks[x][y] == 5 {
-							fmt.println("SPECIAL BLOCK HIT!")
+						if blocks[x][y].value == 5 {
 							append(&special_blocks, calc_block_rect(x, y))
-							fmt.println(special_blocks)
 						}
 
-						blocks[x][y] -= 1
-						row_color := row_colors[y]
+						blocks[x][y].value -= 1
+						row_color := block_value_colors[blocks[x][y].value]
 						score += block_color_score[row_color]
 						rl.SetSoundPitch(hit_block_sound, rand.float32_range(0.8, 1.2))
 						rl.PlaySound(hit_block_sound)
@@ -350,8 +353,8 @@ main :: proc() {
 		paddle_render_pos_x := math.lerp(previous_paddle_pos_x, paddle_pos_x, blend)
 
 
-		// region ------------------------------------------------------------------------------
 		// Draw
+		// ------------------------------------------------------------------------------
 		rl.BeginDrawing()
 		// rl.ClearBackground({150, 190, 220, 255})
 		rl.ClearBackground({0, 0, 0, 255})
@@ -373,7 +376,7 @@ main :: proc() {
 
 		for x in 0 ..< NUM_BLOCKS_X {
 			for y in 0 ..< NUM_BLOCKS_Y {
-				if blocks[x][y] == 0 {
+				if blocks[x][y].value == 0 {
 					continue
 				}
 
@@ -393,21 +396,17 @@ main :: proc() {
 				// rl.DrawRectangleRec(block_rect, block_color_values[row_colors[y]])
 				rl.DrawRectangleRec(
 					block_rect,
-					block_color_values[block_value_colors[blocks[x][y]]],
+					block_color_values[block_value_colors[blocks[x][y].value]],
 				)
 				rl.DrawLineEx(top_left, top_right, 1, {0, 0, 0, 255})
 				rl.DrawLineEx(top_left, bottom_left, 1, {0, 0, 0, 255})
 				rl.DrawLineEx(top_right, bottom_right, 1, {0, 0, 0, 255})
 				rl.DrawLineEx(bottom_left, bottom_right, 1, {0, 0, 0, 255})
 
-				// if blocks[x][y] == 5 {
-				// 	rl.DrawRectangleRec(calc_block_rect(x, y), rl.BEIGE)
-				// }
 			}
 		}
 
 		for v, i in special_blocks {
-			// fmt.println("DRAW THE BLOCK")
 			rl.DrawRectangleRec(v, rl.BEIGE)
 		}
 
@@ -462,9 +461,8 @@ main :: proc() {
 
 		free_all(context.temp_allocator)
 	}
-
-	// region ----------------------------------------------------------------------------------
 	// De-Initialization
+	// ----------------------------------------------------------------------------------
 
 	delete(special_blocks)
 
